@@ -1,87 +1,56 @@
-
-""" Extensions to TF RNN class by una_dinosaria"""
-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import tensorflow as tf
 
-from tensorflow.contrib.rnn.python.ops.core_rnn_cell import RNNCell
+class LinearSpaceDecoderWrapper(tf.keras.layers.Layer):
+    """Operator adding a linear encoder to an RNN cell"""
 
-# The import for LSTMStateTuple changes in TF >= 1.2.0
-from pkg_resources import parse_version as pv
-if pv(tf.__version__) >= pv('1.2.0'):
-  from tensorflow.contrib.rnn import LSTMStateTuple
-else:
-  from tensorflow.contrib.rnn.python.ops.core_rnn_cell import LSTMStateTuple
-del pv
+    def __init__(self, cell, output_size):
+        """Create a cell with a linear encoder in space.
 
-from tensorflow.python.ops import variable_scope as vs
+        Args:
+          cell: a tf.keras.layers.Layer (e.g., GRUCell or LSTMCell). Input is passed through a linear layer.
+          output_size: int, the size of the output projection layer.
 
-import collections
-import math
+        Raises:
+          TypeError: if cell is not a valid RNN layer.
+        """
+        super(LinearSpaceDecoderWrapper, self).__init__()
 
-class LinearSpaceDecoderWrapper(RNNCell):
-  """Operator adding a linear encoder to an RNN cell"""
+        if not isinstance(cell, tf.keras.layers.Layer):
+            raise TypeError("The parameter cell is not a valid tf.keras layer.")
 
-  def __init__(self, cell, output_size):
-    """Create a cell with with a linear encoder in space.
+        self._cell = cell
+        self.linear_output_size = output_size
 
-    Args:
-      cell: an RNNCell. The input is passed through a linear layer.
+        print(f'output_size = {output_size}')
+        print(f'state_size = {self._cell.state_size}')
 
-    Raises:
-      TypeError: if cell is not an RNNCell.
-    """
-    if not isinstance(cell, RNNCell):
-      raise TypeError("The parameter cell is not a RNNCell.")
+        # Initialize the linear projection layer
+        self.w_out = self.add_weight(
+            name="proj_w_out",
+            shape=(self._cell.output_size, output_size),
+            initializer=tf.random_uniform_initializer(minval=-0.04, maxval=0.04),
+        )
 
-    self._cell = cell
+        self.b_out = self.add_weight(
+            name="proj_b_out",
+            shape=(output_size,),
+            initializer=tf.random_uniform_initializer(minval=-0.04, maxval=0.04),
+        )
 
-    print( 'output_size = {0}'.format(output_size) )
-    print( 'state_size = {0}'.format(self._cell.state_size) )
+    @property
+    def state_size(self):
+        return self._cell.state_size
 
-    # Tuple if multi-rnn
-    if isinstance(self._cell.state_size,tuple):
+    @property
+    def output_size(self):
+        return self.linear_output_size
 
-      # Fine if GRU...
-      insize = self._cell.state_size[-1]
+    def call(self, inputs, states):
+        """Use a linear layer and pass the output to the cell."""
+        # Run the RNN as usual
+        output, new_states = self._cell(inputs, states)
 
-      # LSTMStateTuple if LSTM
-      if isinstance( insize, LSTMStateTuple ):
-        insize = insize.h
+        # Apply the linear transformation
+        output = tf.matmul(output, self.w_out) + self.b_out
 
-    else:
-      # Fine if not multi-rnn
-      insize = self._cell.state_size
-
-    self.w_out = tf.get_variable("proj_w_out",
-        [insize, output_size],
-        dtype=tf.float32,
-        initializer=tf.random_uniform_initializer(minval=-0.04, maxval=0.04))
-    self.b_out = tf.get_variable("proj_b_out", [output_size],
-        dtype=tf.float32,
-        initializer=tf.random_uniform_initializer(minval=-0.04, maxval=0.04))
-
-    self.linear_output_size = output_size
-
-
-  @property
-  def state_size(self):
-    return self._cell.state_size
-
-  @property
-  def output_size(self):
-    return self.linear_output_size
-
-  def __call__(self, inputs, state, scope=None):
-    """Use a linear layer and pass the output to the cell."""
-
-    # Run the rnn as usual
-    output, new_state = self._cell(inputs, state, scope)
-
-    # Apply the multiplication to everything
-    output = tf.matmul(output, self.w_out) + self.b_out
-
-    return output, new_state
+        return output, new_states

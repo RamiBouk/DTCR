@@ -104,7 +104,7 @@ class RNN_clustering_model(object):
 
         lf = None
         if self.sample_loss:
-            print
+            print()
             'Sample Loss'
 
             def lf(prev, i):
